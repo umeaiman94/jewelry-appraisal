@@ -1,0 +1,108 @@
+import os
+import cohere
+from dotenv import load_dotenv
+
+load_dotenv()
+
+def generate_provenance_report(
+    metal_type: str,
+    gemstone: str,
+    carat_weight: float,
+    cut_grade: str,
+    condition: str,
+    estimated_price: float,
+) -> str:
+    """
+    Calls Cohere API to generate a professional auction-house style
+    buyer-facing condition and provenance summary.
+    Returns a formatted string report.
+    Falls back gracefully if API key is missing or call fails.
+    """
+
+    api_key = os.getenv("COHERE_API_KEY", "").strip()
+
+    if not api_key:
+        return _fallback_report(metal_type, gemstone, carat_weight,
+                                cut_grade, condition, estimated_price,
+                                reason="API key not configured")
+
+    # ── build prompt ─────────────────────────────────────────────────────────
+    gem_desc = (f"{carat_weight:.2f}-carat {gemstone} (cut grade: {cut_grade})"
+                if gemstone and gemstone != "None" and float(carat_weight) > 0
+                else "no centre gemstone")
+
+    prompt = f"""You are a senior gemologist and auction-house specialist writing 
+buyer-facing appraisal reports for a luxury pre-owned jewelry marketplace.
+
+Write a professional, trustworthy 3-paragraph provenance and condition summary for 
+the following piece. Use refined auction-house language (similar to Christie's or 
+Sotheby's catalogue notes). 
+
+Piece specifications:
+- Metal: {metal_type}
+- Gemstone: {gem_desc}
+- Condition: {condition}
+- Estimated Fair Market Value: USD {estimated_price:,.2f}
+
+Paragraph 1 — Description & Provenance: Describe the piece in evocative detail, 
+highlighting its materials and craftsmanship.
+
+Paragraph 2 — Condition Assessment: Professionally assess the piece's condition, 
+noting what "{condition}" means for wearability, lustre, and collectability.
+
+Paragraph 3 — Valuation Rationale: Explain, in buyer-friendly language, the key 
+factors that drove the estimated price of USD {estimated_price:,.2f}, referencing 
+metal purity, gemstone characteristics, and secondary market demand.
+
+Write only the three paragraphs. No headers. No bullet points."""
+
+    # ── API call ──────────────────────────────────────────────────────────────
+    try:
+        co = cohere.ClientV2(api_key=api_key)
+        response = co.chat(
+            model="command-r-plus-08-2024",
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.message.content[0].text.strip()
+        return text
+
+    except cohere.errors.UnauthorizedError:
+        return _fallback_report(metal_type, gemstone, carat_weight,
+                                cut_grade, condition, estimated_price,
+                                reason="Invalid API key — please check your .env file")
+    except cohere.errors.TooManyRequestsError:
+        return _fallback_report(metal_type, gemstone, carat_weight,
+                                cut_grade, condition, estimated_price,
+                                reason="Rate limit reached — please wait and retry")
+    except Exception as e:
+        return _fallback_report(metal_type, gemstone, carat_weight,
+                                cut_grade, condition, estimated_price,
+                                reason=f"API connectivity failure: {str(e)}")
+
+
+# ── graceful fallback ─────────────────────────────────────────────────────────
+def _fallback_report(metal_type, gemstone, carat_weight, cut_grade,
+                     condition, estimated_price, reason=""):
+    gem_line = (f"set with a {carat_weight:.2f}-carat {gemstone} ({cut_grade} cut)"
+                if gemstone and gemstone != "None" and float(carat_weight) > 0
+                else "featuring a refined metal-only composition")
+
+    report = (
+        f"This pre-owned jewelry piece is crafted in {metal_type}, {gem_line}. "
+        f"The piece presents an opportunity to acquire a quality item from the secondary luxury market.\n\n"
+
+        f"Condition is assessed as '{condition}', indicating "
+        + {
+            "Mint":      "no visible wear; the piece retains its original finish and lustre in full.",
+            "Excellent": "minimal signs of use; surfaces and settings remain crisp and well-maintained.",
+            "Good":      "light surface wear consistent with careful ownership; structurally sound.",
+            "Fair":      "moderate wear visible; may benefit from professional polishing or minor service.",
+            "Poor":      "significant wear or damage present; priced accordingly for restoration projects.",
+        }.get(condition, "a condition consistent with secondary-market expectations.") + "\n\n"
+
+        f"The estimated fair market value of USD {estimated_price:,.2f} reflects current secondary-market "
+        f"demand for {metal_type} pieces, gemstone quality, condition grade, and comparable auction results. "
+        f"This appraisal is generated by a KNN regression model trained on historical resale data.\n\n"
+        f"⚠ Note: Live provenance summary unavailable ({reason})."
+    )
+    return report
